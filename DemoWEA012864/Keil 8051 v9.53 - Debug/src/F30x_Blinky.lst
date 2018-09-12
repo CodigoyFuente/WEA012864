@@ -1,0 +1,730 @@
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 1   
+
+
+C51 COMPILER V9.53.0.0, COMPILATION OF MODULE F30X_BLINKY
+OBJECT MODULE PLACED IN .\src/F30x_Blinky.OBJ
+COMPILER INVOKED BY: Z:\home\gabriel\Descargas\SimplicityStudio_v4\developer\toolchains\keil_8051\9.53\BIN\C51.exe /root
+                    -/SimplicityStudio/v4_workspace/F30x_Blinky_c/src/F30x_Blinky.c OMF2 SMALL DEBUG OBJECTEXTEND ROM(LARGE) WARNINGLEVEL(2) 
+                    -FLOATFUZZY(3) OPTIMIZE(8,SPEED) DEFINE(DEBUG=1) INTVECTOR(0X0000) INTPROMOTE INCDIR(/home/gabriel/Descargas/SimplicitySt
+                    -udio_v4/developer/sdks/8051/v4.1.2//Device/shared/si8051base;/home/gabriel/Descargas/SimplicityStudio_v4/developer/sdks/
+                    -8051/v4.1.2//Device/C8051F300/inc) PRINT(.\src/F30x_Blinky.lst) COND PAGEWIDTH(120) PAGELENGTH(65) OBJECT(.\src/F30x_Bli
+                    -nky.OBJ)
+
+line level    source
+
+   1          //-----------------------------------------------------------------------------
+   2          // F30x_Blinky.c
+   3          //-----------------------------------------------------------------------------
+   4          // Copyright 2014 Silicon Laboratories, Inc.
+   5          // http://developer.silabs.com/legal/version/v11/Silicon_Labs_Software_License_Agreement.txt
+   6          //
+   7          // This program flashes the green LED on the C8051F30x target board about 
+   8          // five times a second using the interrupt handler for Timer2.
+   9          //
+  10          //
+  11          // How To Test:
+  12          // ------------
+  13          // 1) Ensure shorting blocks are place on the following:
+  14          //    - J3: P0.2 - P0.2_LED
+  15          // 2) Connect the USB Debug Adapter to J4.
+  16          // 3) Connect the 9V power adapter to P1.
+  17          // 4) Compile and download code to a 'F300 device on a C8051F300-TB development
+  18          //    board selecting Run -> Debug from the menus, clicking the Debug button in
+  19          //    the quick menu, or pressing F11.
+  20          // 5) Run the code by selecting Run -> Resume from the menus, clicking the
+  21          //    Resume button in the quick menu, or pressing F8.
+  22          // 6) The LED should blink at 5 Hz.
+  23          //
+  24          // Target:         C8051F30x
+  25          // Tool chain:     Simplicity Studio / Keil C51 9.51
+  26          // Command Line:   None
+  27          //
+  28          // Release 1.1 (BL)
+  29          //    - Updated Description / How to Test
+  30          //    - Replaced C51 code with compiler agnostic code
+  31          //    - 09 JAN 2014
+  32          //
+  33          // Release 1.0
+  34          //    -Initial Revision BW
+  35          //    -11-Oct-01
+  36          //
+  37          //-----------------------------------------------------------------------------
+  38          // Includes
+  39          //-----------------------------------------------------------------------------
+  40          #include "SI_C8051F300_Register_Enums.h"
+  41          
+  42          //-----------------------------------------------------------------------------
+  43          // Global CONSTANTS
+  44          //-----------------------------------------------------------------------------
+  45          
+  46          #define SYSCLK       24500000 / 8          // SYSCLK frequency in Hz
+  47          
+  48          SBIT (LED, SFR_P0, 2);                     // LED='1' means ON
+  49          SBIT (SCL, SFR_P0, 0);
+  50          SBIT (SDA, SFR_P0, 1);
+  51          SBIT (CS, SFR_P0, 6);
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 2   
+
+  52          SBIT (DC, SFR_P0, 7);
+  53          
+  54          // Estos pines debajo están en la aplicación demo del C8051F340 de Winstar pero creo que no las necesito
+  55          //sbit          LCM_RESET = P0^3;
+  56          //sbit        STP = P0^0;
+  57          //sbit        S_S = P0^1;
+  58          
+  59          #define  Device   0x78                                          //I2C address
+  60          #define  Duty     63
+  61          #define  Column   128
+  62          #define  Row      64
+  63          #define  segment  0                                             //IC start segment line
+  64          #define  Contrast_volue 0xff
+  65          
+  66          //-----------------------------------------------------------------------------
+  67          // Function PROTOTYPES
+  68          //-----------------------------------------------------------------------------
+  69          INTERRUPT_PROTO(Timer2_ISR, TIMER2_IRQn);
+  70          void SYSCLK_Init (void);
+  71          void PORT_Init (void);
+  72          void Timer2_Init (S16 counts);
+  73          
+  74          void uDelay(unsigned char);
+  75          void delay(unsigned char);
+  76          void stp_sc(void);
+  77          void Initial_SSD1306BZ(void);
+  78          void Write_command(unsigned char);
+  79          void Write_data(unsigned char);
+  80          void show_pic(unsigned char code *p);
+  81          void show_HV(unsigned char dat1,unsigned char dat2);
+  82          void show_50_ck(unsigned char dat1,unsigned char dat2);//50% check
+  83          
+  84          unsigned char code picture4[8][128];
+  85          unsigned char code picture5[8][128];
+  86          unsigned char code picture6[8][128];
+  87          unsigned char code picture7[8][128];
+  88          
+  89          
+  90          //-----------------------------------------------------------------------------
+  91          // SiLabs_Startup() Routine
+  92          // ----------------------------------------------------------------------------
+  93          // This function is called immediately after reset, before the initialization
+  94          // code is run in SILABS_STARTUP.A51 (which runs before main() ). This is a
+  95          // useful place to disable the watchdog timer, which is enable by default
+  96          // and may trigger before main() in some instances.
+  97          //-----------------------------------------------------------------------------
+  98          void SiLabs_Startup (void)
+  99          {
+ 100   1         PCA0MD &= ~0x40;                       // WDTE = 0 (clear watchdog timer 
+ 101   1      }
+ 102           
+ 103          //-----------------------------------------------------------------------------
+ 104          // MAIN Routine
+ 105          //-----------------------------------------------------------------------------
+ 106          void main (void) {
+ 107   1      
+ 108   1         // disable watchdog timer
+ 109   1                                                // enable)
+ 110   1      
+ 111   1         SYSCLK_Init ();                        // Initialize system clock to 
+ 112   1                                                // 24.5MHz
+ 113   1         PORT_Init ();                          // Initialize crossbar and GPIO
+ 114   1         Timer2_Init (SYSCLK / 12 / 10);        // Init Timer2 to generate 
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 3   
+
+ 115   1                                                // interrupts at a 10Hz rate.
+ 116   1      
+ 117   1         Initial_SSD1306BZ();
+ 118   1      
+ 119   1         IE_EA = 1;                             // enable global interrupts
+ 120   1      
+ 121   1         while (1) {                            // spin forever
+ 122   2      
+ 123   2                 ///* DEMO
+ 124   2                              show_pic(&picture4[0]);   //abc
+ 125   2                              delay(300);
+ 126   2                              //stp_sc();
+ 127   2      
+ 128   2                              show_pic(&picture5[0]);   //abc
+ 129   2                              delay(300);
+ 130   2                              //stp_sc();
+ 131   2      
+ 132   2                              show_pic(&picture6[0]);   //abc
+ 133   2                              delay(300);
+ 134   2                              //stp_sc();
+ 135   2      
+ 136   2                              show_pic(&picture7[0]);   //abc
+ 137   2                              delay(300);
+ 138   2                              //stp_sc();
+ 139   2                 //*/
+ 140   2      
+ 141   2         }
+ 142   1      }
+ 143          
+ 144          //-----------------------------------------------------------------------------
+ 145          // SYSCLK_Init
+ 146          //-----------------------------------------------------------------------------
+ 147          //
+ 148          // This routine initializes the system clock to use the internal 24.5MHz / 8 
+ 149          // oscillator as its clock source.  Also enables missing clock detector reset.
+ 150          //
+ 151          void SYSCLK_Init (void)
+ 152          {
+ 153   1         OSCICN = 0x04;                         // configure internal oscillator for
+ 154   1                                                // its lowest frequency
+ 155   1         RSTSRC = 0x04;                         // enable missing clock detector
+ 156   1      }
+ 157          
+ 158          //-----------------------------------------------------------------------------
+ 159          // PORT_Init
+ 160          //-----------------------------------------------------------------------------
+ 161          //
+ 162          // Configure the Crossbar and GPIO ports.
+ 163          // P0.2 - LED (push-pull)
+ 164          
+ 165          void PORT_Init (void)
+ 166          {
+ 167   1         XBR0     = 0x04;                       // skip P0.2 (LED) in crossbar pin
+ 168   1                                                // assignments
+ 169   1         XBR1     = 0x00;                       // no digital peripherals selected
+ 170   1         XBR2     = 0x40;                       // Enable crossbar and weak pull-ups
+ 171   1         P0MDOUT |= 0xC7;                       // enable LED as a push-pull output in P0.2 y P0.0, P0.1, P0.6 y
+             - P0.7 todas push pull
+ 172   1      }
+ 173          
+ 174          //-----------------------------------------------------------------------------
+ 175          // Timer2_Init
+ 176          //-----------------------------------------------------------------------------
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 4   
+
+ 177          //
+ 178          // Configure Timer2 to 16-bit auto-reload and generate an interrupt at 
+ 179          // interval specified by <counts> using SYSCLK/12 as its time base.
+ 180          //
+ 181          void Timer2_Init (S16 counts)
+ 182          {
+ 183   1         TMR2CN  = 0x00;                        // Stop Timer2; Clear TF2;
+ 184   1                                                // use SYSCLK/12 as timebase
+ 185   1         CKCON  &= ~(CKCON_T2MH__BMASK |
+ 186   1                     CKCON_T2ML__BMASK );       // Timer2 clocked based on TMR2CN_T2XCLK
+ 187   1      
+ 188   1         TMR2RL  = -counts;                     // Init reload values
+ 189   1         TMR2    = 0xffff;                      // set to reload immediately
+ 190   1         IE_ET2  = 1;                           // enable Timer2 interrupts
+ 191   1         TMR2CN_TR2 = 1;                        // start Timer2
+ 192   1      }
+ 193          
+ 194          
+ 195          
+ 196          
+ 197          //==============================================================
+ 198          //      initial SSD1306BZ
+ 199          //==============================================================
+ 200          void Initial_SSD1306BZ()
+ 201          {
+ 202   1      
+ 203   1                      DC = 0;
+ 204   1              Write_command(0xAE);  // Display Off
+ 205   1      
+ 206   1                      Write_command(0xD5);  //SET DISPLAY CLOCK
+ 207   1              Write_command(0x80);  //105HZ
+ 208   1      
+ 209   1                      Write_command(0xA8);  // Select Multiplex Ratio
+ 210   1              Write_command(Duty);    // Default => 0~0x3F (1/64 Duty)
+ 211   1      
+ 212   1                      Write_command(0xD3);  //Setting Display Offset
+ 213   1              Write_command(0x00);  //00H Reset,  set common start
+ 214   1      
+ 215   1                      Write_command(0x40);  //Set Display Start Line
+ 216   1      
+ 217   1                      Write_command(0x8D);  // Set Charge Pump
+ 218   1                      Write_command(0x14);  // Endable Charge Pump
+ 219   1      
+ 220   1                      Write_command(0xA1);  //Set Segment Re-Map Default
+ 221   1                                                                //0xA0 (0x00) => column Address 0 mapped to 127
+ 222   1                                    //0xA1 (0x01) => Column Address 127 mapped to 0
+ 223   1      
+ 224   1                      Write_command(0xAD);  // Set Charge Pump
+ 225   1                      Write_command(0x30);  // Endable Charge Pump
+ 226   1      
+ 227   1                      Write_command(0xC8);  //Set COM Output Scan Direction
+ 228   1                                                                // 0xC0       (0x00) => normal mode (RESET) Scan from COM0 to COM[N-1];Where N is the Multiplex ratio.
+ 229   1                                                                // 0xC8       (0xC8) => remapped mode. Scan from COM[N-1] to COM0;;Where N is the Multiplex ratio.
+ 230   1      
+ 231   1                      Write_command(0xDA);  //Set COM Hardware Configuration
+ 232   1              Write_command(0x12);  //Alternative COM Pin---See IC Spec page 34
+ 233   1                                                                //(0x02)=> A4=0;Sequential COM pin configuration;A5=0;Disable COM Left/Right remap
+ 234   1      
+ 235   1                      Write_command(0x81);  //Set Contrast Control
+ 236   1                      Write_command(Contrast_volue);
+ 237   1      
+ 238   1                      Write_command(0xD9);  //Set Pre-Charge period
+ 239   1              Write_command(0x22);
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 5   
+
+ 240   1      
+ 241   1                      Write_command(0xDB);  //Set Deselect Vcomh level
+ 242   1              Write_command(0x30);   //
+ 243   1      
+ 244   1              Write_command(0xA4);  //Entire Display ON
+ 245   1      
+ 246   1                      Write_command(0xA6);  //Set Normal Display
+ 247   1              Write_command(0xAF);  // Display ON
+ 248   1      }
+ 249          //====================================================================
+ 250          void Write_byte(unsigned char dat)
+ 251          {
+ 252   1            unsigned char i;
+ 253   1            for(i=0;i<8;i++)
+ 254   1              {
+ 255   2                 SCL=0;
+ 256   2                         if((dat<<i)&0x80)
+ 257   2                    SDA=1;
+ 258   2                 else
+ 259   2                    SDA=0;
+ 260   2                 //_nop_();
+ 261   2                 SCL=1;
+ 262   2                 //_nop_();
+ 263   2                 SCL=0;
+ 264   2              }
+ 265   1              SDA=1;
+ 266   1              //_nop_();
+ 267   1              SCL=1;
+ 268   1              //_nop_();
+ 269   1              while(1==SDA)
+ 270   1              {
+ 271   2                //_nop_();
+ 272   2              }
+ 273   1              SCL=0;
+ 274   1      }
+ 275          //-------------------------------------------------
+ 276          //          Write Data Function
+ 277          //-------------------------------------------------
+ 278          void Write_data(unsigned char datap){
+ 279   1      /* I2C interface
+ 280   1      
+ 281   1              SDA=1;
+ 282   1      //_nop_();
+ 283   1              SCL=1;
+ 284   1      //_nop_();
+ 285   1              SDA=0;
+ 286   1      
+ 287   1              Write_byte(Device);
+ 288   1              Write_byte(0x40);
+ 289   1              Write_byte(datap);
+ 290   1      
+ 291   1              SDA=0;
+ 292   1      //_nop_();
+ 293   1              SCL=1;
+ 294   1      //_nop_();
+ 295   1              SDA=1;
+ 296   1      //*/
+ 297   1      
+ 298   1      //* SPI interface
+ 299   1              unsigned char bMask;
+ 300   1              CS = 0;
+ 301   1              DC = 1;
+ 302   1      
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 6   
+
+ 303   1              for(bMask = 0x80; bMask; bMask >>= 1){
+ 304   2                      SCL = 0;
+ 305   2                      SDA = bMask & datap;
+ 306   2                      SCL = 1;
+ 307   2              }
+ 308   1              CS = 1;
+ 309   1      //*/
+ 310   1      }
+ 311          //-------------------------------------------------
+ 312          //     WRITE_COMMAND
+ 313          //-------------------------------------------------
+ 314          void Write_command(unsigned char command){
+ 315   1      /* I2C interface
+ 316   1          SDA=1;
+ 317   1      //_nop_();
+ 318   1          SCL=1;
+ 319   1      //_nop_();
+ 320   1          SDA=0;
+ 321   1      
+ 322   1          Write_byte(Device);
+ 323   1          Write_byte(0x00);
+ 324   1          Write_byte(command);
+ 325   1      
+ 326   1          SDA=0;
+ 327   1      //_nop_();
+ 328   1         SCL=1;
+ 329   1      //_nop_();
+ 330   1         SDA=1;
+ 331   1      //*/
+ 332   1      //* SPI interface
+ 333   1                      unsigned char bMask;
+ 334   1                  CS = 0;
+ 335   1                      DC = 0;
+ 336   1      
+ 337   1              for (bMask = 0x80; bMask; bMask >>= 1)
+ 338   1              {
+ 339   2                  SCL = 0;
+ 340   2                              SDA = bMask & command;
+ 341   2                      SCL = 1;
+ 342   2                  }
+ 343   1                      CS = 1;
+ 344   1      //*/
+ 345   1      }
+ 346          
+ 347          
+ 348          //=========================================
+ 349          void show_pic(unsigned char code *p)
+ 350          {
+ 351   1        unsigned char  x,y,Z=0xB0;
+ 352   1        for(x = 0;x<(Row/8);x++)
+ 353   1        {
+ 354   2         Write_command(Z);
+ 355   2         Z++;
+ 356   2         Write_command(segment%16);         //Set Lower Column Start Address
+ 357   2         Write_command(0x10+segment/16);      //Set Higher Column Start Address
+ 358   2         for(y = 0;y<Column;y++)
+ 359   2         {
+ 360   3               Write_data(*p++);
+ 361   3         }
+ 362   2        }
+ 363   1      }
+ 364          
+ 365          
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 7   
+
+ 366          //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+ 367          //  Delay Time
+ 368          //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+ 369          void uDelay(unsigned char l)
+ 370          {
+ 371   1              while(l--);
+ 372   1      }
+ 373          //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+ 374          void delay(unsigned char coun)
+ 375          {
+ 376   1              unsigned char i,j,k;
+ 377   1      
+ 378   1              for(k = 0 ;k<coun;k++)
+ 379   1              {
+ 380   2                      for(j = 0 ;j<150;j++)
+ 381   2                      {
+ 382   3                              for(i = 0 ;i< 200;i++)
+ 383   3                              {}
+ 384   3                      }
+ 385   2              }
+ 386   1      }
+ 387          
+ 388          //-----------------------------------------------------------------------------
+ 389          // Interrupt Service Routines
+ 390          //-----------------------------------------------------------------------------
+ 391          
+ 392          //-----------------------------------------------------------------------------
+ 393          // Timer2_ISR
+ 394          //-----------------------------------------------------------------------------
+ 395          // This routine changes the state of the LED whenever Timer2 overflows.
+ 396          //
+ 397          INTERRUPT(Timer2_ISR, TIMER2_IRQn)
+ 398          {
+ 399   1         TMR2CN_TF2H = 0;                       // clear Timer2 interrupt flag
+ 400   1         LED = ~LED;                            // change state of LED
+ 401   1      }
+ 402          
+ 403          
+ 404          
+ 405          unsigned char code picture4[8][128] ={
+ 406          0XFF,0X00,0XFF,0XFF,0XFF,0X03,0X03,0XC3,0X0F,0X3F,0X3F,0X0F,0XC3,0X03,0X03,0XFF,
+ 407          0X03,0X03,0XBB,0XBB,0XBB,0XFB,0XFF,0X03,0X03,0XC3,0X0F,0X3F,0X03,0X03,0XFF,0X03,
+ 408          0X03,0XFF,0XFF,0XFF,0XFF,0X03,0X03,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X7F,0XBF,
+ 409          0X5F,0X2F,0X17,0X0B,0X05,0X02,0X01,0X00,0X00,0X00,0X00,0X00,0XC0,0XC0,0X40,0X40,
+ 410          0X40,0X40,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 411          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 412          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 413          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 414          0X1F,0X00,0X1F,0X1F,0X1F,0X18,0X18,0X1F,0X1F,0X1C,0X1C,0X1F,0X1F,0X18,0X18,0X1F,
+ 415          0X18,0X18,0X1B,0X1B,0X1B,0X1B,0X1F,0X18,0X18,0X1F,0X1F,0X1C,0X18,0X18,0X1F,0X1E,
+ 416          0X1C,0X19,0X1B,0X1B,0X19,0X1C,0X1E,0X1F,0X1F,0X0F,0X17,0X0B,0X05,0X02,0X01,0X00,
+ 417          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X3F,0X3F,0X22,0X22,
+ 418          0X22,0X22,0X00,0X22,0X27,0X25,0X3D,0X19,0X00,0X7F,0X7F,0X21,0X3F,0X1E,0X00,0X3C,
+ 419          0X3F,0X03,0X01,0X01,0X00,0X1E,0X3F,0X29,0X29,0X2E,0X00,0X22,0X27,0X25,0X3D,0X19,
+ 420          0X00,0X22,0X27,0X25,0X3D,0X19,0X00,0X1E,0X3F,0X21,0X3F,0X1E,0X00,0X00,0X00,0X00,
+ 421          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 422          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XC0,0XE0,0X00,0X00,0XF8,
+ 423          0XDC,0X80,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 424          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X40,0X40,0X40,
+ 425          0X40,0X40,0X48,0X58,0XF0,0XE0,0XE0,0X40,0X00,0X00,0X00,0XF0,0XF8,0X0C,0X04,0X04,
+ 426          0X04,0X00,0X80,0XD0,0X50,0X50,0XF0,0XE0,0X00,0XF0,0XF0,0X10,0XF0,0XE0,0X00,0XF0,
+ 427          0XF0,0X10,0XF0,0XE0,0X00,0XF0,0XF0,0X00,0X00,0XF0,0XF0,0X00,0XE0,0XF0,0X10,0X10,
+ 428          0X10,0X00,0XE0,0XF0,0X10,0X10,0X10,0X00,0XF4,0XF4,0X00,0XF0,0XF0,0X10,0X10,0XF0,
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 8   
+
+ 429          0XE0,0X00,0XE0,0XF0,0X10,0XF0,0XE0,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 430          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X03,0X36,0X1E,0X00,0X00,
+ 431          0X0D,0X03,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 432          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 433          0X00,0X00,0X02,0X03,0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XC1,0XC3,0X03,0X02,
+ 434          0X02,0X00,0X01,0X03,0X02,0X02,0X03,0X03,0X00,0X07,0XC7,0XC2,0X03,0X01,0XC0,0XC7,
+ 435          0X07,0X02,0X03,0X01,0X00,0X01,0X03,0X02,0X02,0X03,0X03,0X00,0X01,0X03,0X02,0X02,
+ 436          0X02,0X00,0X01,0X03,0X02,0X02,0X02,0X00,0X03,0X03,0X00,0X03,0X03,0X00,0X00,0X03,
+ 437          0X03,0X00,0X01,0X03,0X02,0X03,0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 438          0X00,0X00,0X00,0X00,0X00,0X00,0X07,0X3F,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,
+ 439          0XFF,0XFF,0XFF,0XFF,0XFF,0XDF,0XC7,0X66,0X7E,0X00,0X00,0X00,0X00,0XC0,0XE0,0X98,
+ 440          0XC8,0XA4,0XC3,0XA6,0X8C,0X90,0X90,0XE0,0XC0,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 441          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X3F,0X3F,0X20,0X20,
+ 442          0X20,0X00,0X18,0X3D,0X25,0X25,0X3F,0X3E,0X00,0X01,0X1F,0X3F,0X21,0X00,0X1F,0X3F,
+ 443          0X21,0X00,0X1E,0X3F,0X29,0X29,0X2E,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 444          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X38,0X74,0XEC,0XDC,0XB8,0X70,
+ 445          0X00,0X38,0X74,0XEC,0XDC,0XB8,0X70,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 446          0X00,0X00,0X00,0X00,0X00,0X08,0X08,0X08,0X08,0X09,0X0B,0X0B,0X0B,0X0B,0X0B,0X0B,
+ 447          0X0B,0X0B,0X0B,0X09,0X08,0X08,0X08,0X08,0X08,0X00,0X00,0X00,0X00,0X7F,0XF8,0XF8,
+ 448          0XF8,0XF8,0XF8,0XF8,0XF8,0XF8,0XF8,0XF8,0X7F,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 449          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XFE,0XFE,0X0E,0X18,
+ 450          0X30,0X18,0X0E,0XFE,0XFE,0X00,0XF0,0XF8,0X08,0XF8,0XF0,0X00,0XF0,0XF8,0X08,0X08,
+ 451          0X08,0X00,0XFE,0XFE,0X08,0X08,0XF8,0XF0,0X00,0XC0,0XE8,0X28,0X28,0XF8,0XF0,0X00,
+ 452          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X1C,
+ 453          0X3A,0X76,0X6E,0X5C,0X38,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 454          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 455          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X03,0XFF,
+ 456          0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X03,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 457          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XF1,0XF1,0X70,0XC0,
+ 458          0X80,0XC0,0X70,0XF1,0XF1,0X00,0X00,0X41,0X41,0X41,0XC0,0X80,0X00,0X81,0XC1,0X41,
+ 459          0X41,0X40,0X01,0X81,0XC0,0X40,0X41,0X41,0X00,0XF0,0XF1,0X41,0X41,0XC1,0X81,0X00,
+ 460          0XD0,0XD0,0X00,0X00,0X40,0X40,0X40,0XC0,0X80,0X00,0X40,0XF0,0XF0,0X40,0X00,0XF0,
+ 461          0XF0,0X40,0X00,0X80,0XC0,0X40,0XC0,0X80,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 462          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 463          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X04,
+ 464          0X07,0X05,0X05,0X05,0X05,0X07,0X04,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 465          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X0F,0X0F,0X00,0X00,
+ 466          0X01,0X00,0X00,0X0F,0X0F,0X00,0X06,0X0F,0X09,0X09,0X0F,0X0F,0X00,0X07,0X0F,0X08,
+ 467          0X08,0X08,0X00,0X07,0X0F,0X08,0X08,0X08,0X00,0X0F,0X0F,0X00,0X00,0X0F,0X0F,0X00,
+ 468          0X0F,0X0F,0X00,0X06,0X0F,0X09,0X09,0X0F,0X0F,0X00,0X00,0X07,0X0F,0X08,0X00,0X07,
+ 469          0X0F,0X08,0X00,0X07,0X0F,0X08,0X0F,0X07,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 470          };
+ 471          
+ 472          unsigned char code picture5[8][128] ={
+ 473          0X00,0X00,0X00,0XFC,0X84,0X84,0X84,0X84,0XCC,0X78,0X00,0X00,0X00,0XFC,0X00,0X00,
+ 474          0X00,0XBC,0XA4,0XA4,0XA4,0XA4,0XEC,0X00,0X00,0X00,0X80,0XE0,0X58,0X4C,0X58,0XE0,
+ 475          0X80,0X00,0X00,0X00,0XFC,0X24,0X24,0X64,0XA4,0XBC,0X00,0X00,0X00,0XFC,0X08,0X10,
+ 476          0X20,0X10,0X08,0XFC,0X00,0X00,0X00,0X20,0X20,0X20,0X20,0X20,0X20,0X00,0X00,0X00,
+ 477          0X20,0X20,0X20,0X20,0X20,0X20,0X00,0X00,0X00,0X20,0X20,0X20,0X20,0X20,0X20,0X00,
+ 478          0X00,0X00,0X20,0X20,0X20,0X20,0X20,0X20,0X00,0X00,0X00,0X20,0X20,0X20,0X20,0X20,
+ 479          0X20,0X00,0X00,0X80,0XE0,0X58,0X4C,0X58,0XE0,0X80,0X00,0X00,0X00,0XFC,0X24,0X24,
+ 480          0X64,0XA4,0XBC,0X00,0X00,0X00,0XFC,0X08,0X10,0X20,0X10,0X08,0XFC,0X00,0X00,0X00,
+ 481          0X00,0X04,0X84,0XC4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,
+ 482          0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XE4,0XC4,0X84,
+ 483          0X04,0X84,0X44,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,
+ 484          0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X44,0X84,0X04,
+ 485          0X84,0X44,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,
+ 486          0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X44,0X84,0X04,0X84,
+ 487          0X44,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,
+ 488          0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X24,0X44,0X84,0X04,0X04,0X00,
+ 489          0X00,0X00,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X0F,0X07,0X03,0XE3,
+ 490          0XE3,0XE3,0XE3,0X03,0X07,0X0F,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,
+ 491          0X00,0XFF,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XFC,0X06,0XE2,
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 9   
+
+ 492          0X8A,0XAA,0XFC,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XFF,0X00,
+ 493          0XFF,0X00,0X00,0X00,0X00,0X00,0X00,0X70,0XF8,0XF8,0XF8,0XF0,0XEC,0X7E,0X7E,0X7E,
+ 494          0X7E,0XEC,0XF0,0XF8,0XF8,0XF8,0X70,0X00,0X00,0X00,0X00,0X00,0X00,0XFF,0X00,0XFF,
+ 495          0X00,0X00,0X00,0X00,0X80,0XC0,0XE0,0XE0,0XF0,0XF0,0XF8,0XF8,0X78,0X78,0X78,0X78,
+ 496          0XF8,0XF8,0XF0,0XF0,0XE0,0XE0,0XC0,0X80,0X00,0X00,0X00,0X00,0XFF,0X00,0X00,0X00,
+ 497          0X00,0X00,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X03,0X01,0X01,0X00,0X00,0X00,0X01,
+ 498          0X61,0XE1,0X61,0X01,0X01,0X01,0X01,0X01,0X03,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,
+ 499          0X00,0XFF,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XE0,0X30,0XDF,0XE0,0XFF,
+ 500          0XF0,0XE2,0XDF,0X30,0XE0,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XFF,0X00,
+ 501          0XFF,0X00,0X00,0X00,0X00,0X1E,0X3F,0XBF,0XDE,0XFF,0XFF,0XE1,0XDE,0XBF,0XB3,0XB3,
+ 502          0XBF,0XDE,0XE1,0XFF,0XFF,0XDE,0XBF,0X3F,0X1E,0X00,0X00,0X00,0X00,0XFF,0X00,0XFF,
+ 503          0X00,0X00,0X00,0X3F,0X7F,0XFF,0XFF,0XFF,0XFF,0XFF,0XE1,0XDE,0XBF,0XBF,0XBC,0XB8,
+ 504          0XD8,0XE1,0XFF,0XFF,0XFF,0XFF,0XFF,0X7F,0X3F,0X00,0X00,0X00,0XFF,0X00,0X00,0X00,
+ 505          0X00,0X00,0X7F,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0XF0,0XE0,0XE0,0XE0,0XE0,0XE0,0XE0,
+ 506          0XE0,0XE1,0XE0,0XE0,0XE0,0XE0,0XE0,0XE0,0XF0,0XFF,0XFF,0XFF,0XFF,0XFF,0XFF,0X7F,
+ 507          0X00,0X7F,0X80,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X07,0X0C,0X1B,0X16,0X14,
+ 508          0X17,0X17,0X1B,0X0C,0X07,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X80,0X7F,0X00,
+ 509          0X7F,0X80,0X00,0X00,0X00,0X00,0X00,0X03,0X07,0X07,0X07,0X03,0X0D,0X1F,0X1F,0X1F,
+ 510          0X1F,0X0D,0X03,0X07,0X07,0X07,0X03,0X00,0X00,0X00,0X00,0X00,0X80,0X7F,0X00,0X7F,
+ 511          0X80,0X00,0X00,0X00,0X00,0X00,0X01,0X01,0X03,0X03,0X07,0X07,0X07,0X07,0X07,0X07,
+ 512          0X07,0X07,0X03,0X03,0X01,0X01,0X00,0X00,0X00,0X00,0X00,0X80,0X7F,0X00,0X00,0X00,
+ 513          0X00,0X98,0X24,0X24,0XC9,0X01,0XE1,0X51,0X51,0X61,0X01,0XE1,0X11,0X11,0XA1,0X01,
+ 514          0XF1,0X01,0X01,0XF1,0X01,0XF1,0X11,0X01,0XF5,0X01,0X11,0XF9,0X11,0X01,0X10,0XE0,
+ 515          0X00,0XE0,0X10,0X01,0X01,0X09,0X09,0XF9,0X09,0X09,0XC1,0XA1,0XA1,0XC1,0X01,0XE1,
+ 516          0X21,0X21,0XE1,0X21,0X21,0XC1,0X01,0XE1,0X21,0X21,0XC1,0X01,0X01,0X00,0X00,0X00,
+ 517          0X00,0X00,0X31,0X49,0X49,0X91,0X01,0XC1,0XA1,0XA1,0XC1,0X21,0XF1,0X21,0X21,0XF1,
+ 518          0X21,0X01,0XE9,0X01,0XE1,0X21,0X21,0XC1,0X01,0XC1,0X21,0X21,0XE0,0X00,0X00,0X00,
+ 519          0XF0,0X09,0X09,0X09,0X11,0X01,0X21,0XA1,0XA1,0XE1,0X01,0XE1,0X21,0X21,0XE1,0X21,
+ 520          0X21,0XC1,0X01,0XC1,0XA1,0XA1,0XC1,0X01,0XE1,0X21,0X21,0X00,0XA0,0XA0,0XE0,0X00,
+ 521          0X00,0XC0,0X61,0X21,0X20,0X20,0X20,0X21,0X21,0X21,0X20,0X20,0X21,0X21,0X20,0X20,
+ 522          0X20,0X21,0X21,0X21,0X20,0X21,0X20,0X20,0X21,0X20,0X20,0X21,0X21,0X20,0X20,0X24,
+ 523          0X23,0X20,0X20,0X20,0X20,0X20,0X20,0X23,0X20,0X20,0X21,0X22,0X22,0X22,0X20,0X23,
+ 524          0X20,0X20,0X23,0X20,0X20,0X23,0X20,0X2F,0X22,0X22,0X21,0X20,0X20,0X22,0X20,0X20,
+ 525          0X20,0X20,0X21,0X22,0X22,0X21,0X20,0X21,0X22,0X22,0X22,0X20,0X23,0X22,0X20,0X23,
+ 526          0X22,0X20,0X23,0X20,0X23,0X20,0X20,0X23,0X20,0X25,0X2A,0X2A,0X27,0X20,0X20,0X20,
+ 527          0X21,0X22,0X22,0X22,0X21,0X20,0X23,0X22,0X22,0X23,0X20,0X23,0X20,0X20,0X23,0X20,
+ 528          0X20,0X23,0X20,0X21,0X22,0X22,0X22,0X20,0X23,0X20,0X20,0X23,0X22,0X62,0XC3,0X00,
+ 529          0X00,0X3F,0X60,0X40,0X40,0X5F,0X45,0X45,0X4D,0X57,0X40,0X50,0X4E,0X49,0X49,0X4E,
+ 530          0X50,0X40,0X41,0X42,0X5C,0X42,0X41,0X40,0X57,0X55,0X55,0X55,0X5D,0X40,0X41,0X41,
+ 531          0X5F,0X41,0X41,0X50,0X4E,0X49,0X49,0X4E,0X50,0X40,0X5F,0X45,0X45,0X4D,0X57,0X40,
+ 532          0X40,0X40,0X40,0X40,0X5F,0X44,0X44,0X44,0X5F,0X40,0X5F,0X51,0X51,0X51,0X5F,0X40,
+ 533          0X5F,0X44,0X48,0X44,0X5F,0X40,0X5F,0X55,0X55,0X55,0X51,0X40,0X40,0X40,0X40,0X40,
+ 534          0X57,0X55,0X55,0X55,0X5D,0X40,0X5F,0X55,0X55,0X55,0X51,0X40,0X5F,0X51,0X51,0X51,
+ 535          0X51,0X40,0X4F,0X50,0X50,0X50,0X4F,0X40,0X5F,0X45,0X45,0X4D,0X57,0X40,0X5F,0X40,
+ 536          0X41,0X41,0X5F,0X41,0X41,0X40,0X43,0X44,0X58,0X44,0X43,0X40,0X40,0X60,0X3F,0X00,
+ 537          };
+ 538          
+ 539          unsigned char code picture6[8][128] ={
+ 540          0XFF,0X01,0X01,0X01,0X01,0X01,0X81,0X81,0X81,0X81,0X81,0X81,0X01,0X81,0X81,0X01,
+ 541          0X01,0X01,0X81,0X81,0X01,0X81,0X81,0X81,0X81,0X81,0X81,0X01,0X01,0X01,0X01,0X01,
+ 542          0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,
+ 543          0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,0X01,
+ 544          0X01,0X01,0X01,0X01,0X01,0X01,0X7D,0X01,0X01,0XC1,0XE1,0XF1,0XF1,0XF1,0XE1,0XE1,
+ 545          0XF1,0XF1,0XF1,0XE1,0XC1,0X01,0X01,0X01,0XC1,0X41,0X41,0X41,0X41,0XC1,0X01,0X01,
+ 546          0XC1,0X01,0X01,0X01,0X01,0XC1,0X01,0X01,0XC1,0X01,0X01,0X01,0X01,0X01,0X01,0XC1,
+ 547          0X41,0X41,0X41,0X41,0X41,0X01,0X01,0XC1,0X41,0X41,0X41,0X41,0X01,0X01,0X01,0XFF,
+ 548          0XFF,0X00,0X00,0X00,0X00,0X00,0X0B,0X0A,0X0A,0X0A,0X0A,0X0E,0X00,0X00,0X00,0X01,
+ 549          0X0E,0X01,0X00,0X00,0X00,0X0B,0X0A,0X0A,0X0A,0X0A,0X0E,0X00,0X00,0X00,0X00,0X00,
+ 550          0X00,0X00,0X00,0XFF,0XFF,0XFF,0XFF,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XE0,0XF8,
+ 551          0XFF,0X7F,0X1F,0XFF,0XFF,0XFF,0XFF,0X00,0X00,0X00,0XE0,0X7F,0X7F,0XFF,0XEF,0XEF,
+ 552          0XCF,0X8F,0X00,0X00,0X00,0X00,0XDF,0X00,0X00,0X01,0X03,0X07,0X0F,0X1F,0X3F,0X3F,
+ 553          0X1F,0X0F,0X07,0X03,0X01,0X00,0X00,0X00,0X07,0X01,0X01,0X01,0X01,0X01,0X00,0X00,
+ 554          0X07,0X04,0X04,0X04,0X04,0X07,0X00,0X00,0X07,0X04,0X04,0X04,0X04,0X00,0X00,0X05,
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 10  
+
+ 555          0X05,0X05,0X05,0X05,0X07,0X00,0X00,0X07,0X05,0X05,0X04,0X04,0X00,0X00,0X00,0XFF,
+ 556          0XFF,0X00,0X00,0X00,0XF8,0X08,0X08,0XF8,0X08,0X08,0XF8,0X00,0XF8,0X08,0X08,0XF8,
+ 557          0X08,0X08,0XF8,0X00,0XFC,0X10,0X10,0X10,0XFC,0X00,0X78,0XA8,0XA8,0XB8,0X00,0X00,
+ 558          0X00,0X00,0X00,0X7F,0X7F,0X7F,0X7F,0X00,0X00,0X00,0X00,0X00,0X04,0X07,0X07,0X07,
+ 559          0X07,0X07,0X00,0X7F,0X7F,0X7F,0X7F,0X00,0X00,0X00,0X78,0X78,0X78,0X7C,0X7F,0X3F,
+ 560          0X3F,0X0F,0X00,0X00,0X00,0X00,0XF7,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 561          0X00,0X00,0X1E,0X1E,0X1E,0X9E,0XFE,0XFE,0XFE,0X3E,0X06,0X00,0X00,0X00,0X00,0XE0,
+ 562          0XFE,0XFE,0XFE,0XDE,0XDE,0X1E,0X00,0X00,0X00,0X00,0X00,0X00,0XC0,0X20,0X00,0X80,
+ 563          0X80,0X80,0X80,0X80,0X80,0X80,0X00,0XA0,0X00,0X80,0X80,0X80,0X80,0X00,0X00,0XFF,
+ 564          0XFF,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 565          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X03,0X02,0X02,0X03,0X00,0X00,
+ 566          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 567          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 568          0X00,0X00,0X00,0X00,0X00,0X00,0X7D,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 569          0X00,0X00,0X00,0X20,0X3C,0X3F,0X3F,0X1F,0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X3C,
+ 570          0X3C,0X3C,0X3F,0X3F,0X1F,0X0F,0X00,0X00,0X00,0X00,0X18,0X06,0X01,0X00,0X00,0X0F,
+ 571          0X00,0X00,0X0F,0X00,0X00,0X0F,0X00,0X0F,0X00,0X0F,0X00,0X00,0X0F,0X00,0X00,0XFF,
+ 572          0XFF,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,
+ 573          0X01,0X01,0X01,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X01,0X01,0X01,0X00,
+ 574          0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X01,0X01,
+ 575          0X01,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,
+ 576          0X01,0X01,0X01,0X00,0X01,0X01,0XDF,0X00,0X00,0X00,0X00,0X00,0X00,0XE0,0X30,0X10,
+ 577          0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,
+ 578          0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,
+ 579          0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X10,0X30,0XE0,0X00,0X00,0X00,0X00,0X00,0XFF,
+ 580          0XFF,0X00,0X00,0X00,0X00,0X00,0X00,0X1F,0X11,0X11,0X11,0X11,0X0E,0X00,0X00,0X1F,
+ 581          0X00,0X00,0X10,0X0C,0X0A,0X09,0X0A,0X1C,0X10,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 582          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X78,0XFC,0XFE,0XCE,
+ 583          0XCE,0XFE,0XFC,0X78,0X00,0X00,0X00,0X00,0XE0,0XFC,0XFE,0XFE,0XFE,0XE6,0XE0,0XC0,
+ 584          0X80,0X00,0X00,0X00,0X00,0X00,0XF7,0X00,0X00,0X00,0X00,0X00,0X00,0XFF,0X00,0X00,
+ 585          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X2F,0X29,0X29,0X29,0X29,0X3B,0X00,0X00,0X3F,
+ 586          0X25,0X25,0X25,0X21,0X21,0X00,0X00,0X01,0X01,0X01,0X3F,0X01,0X01,0X01,0X00,0X00,
+ 587          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XFF,0X00,0X00,0X00,0X00,0X00,0XFF,
+ 588          0XFF,0X00,0X00,0X00,0XF0,0X10,0X10,0XF0,0X10,0X10,0XF0,0X00,0XF0,0X10,0X10,0XF0,
+ 589          0X10,0X10,0XF0,0X00,0XF8,0X20,0X20,0X20,0XF8,0X00,0XF0,0X50,0X50,0X70,0X00,0X00,
+ 590          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X1E,0X7F,0X7F,0XF3,0XE1,
+ 591          0XE1,0XF3,0X7F,0X7F,0X1E,0X00,0X00,0X1F,0X3F,0X7F,0XFF,0XF1,0XF1,0XF1,0XFF,0X7F,
+ 592          0X3F,0X1F,0X00,0X00,0X00,0X00,0X7D,0X00,0X00,0X00,0X00,0X00,0X00,0XFF,0XFF,0XFF,
+ 593          0X0F,0X6F,0X6F,0X6F,0X6F,0X4F,0XFF,0XEF,0XEF,0XEF,0X0F,0XEF,0XEF,0XEF,0XFF,0XFF,
+ 594          0X7F,0X1F,0XCF,0XCF,0X3F,0X7F,0XFF,0XFF,0X0F,0X6F,0X6F,0X6F,0X6F,0X0F,0XFF,0XFF,
+ 595          0XEF,0XEF,0XEF,0X0F,0XEF,0XEF,0XEF,0XFF,0XFF,0XFF,0X00,0X00,0X00,0X00,0X00,0XFF,
+ 596          0XFF,0X80,0X80,0X80,0X81,0X80,0X80,0X81,0X80,0X80,0X81,0X80,0X81,0X80,0X80,0X81,
+ 597          0X80,0X80,0X81,0X80,0X81,0X80,0X80,0X80,0X81,0X80,0X86,0X85,0X85,0X87,0X80,0X80,
+ 598          0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,
+ 599          0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,0X80,
+ 600          0X80,0X80,0X80,0X80,0X80,0X80,0XBF,0X80,0X80,0X80,0X80,0X80,0X80,0X9F,0XBF,0XBF,
+ 601          0XBD,0XBD,0XBD,0XBD,0XBD,0XBC,0XBF,0XBF,0XBF,0XBF,0XBC,0XBF,0XBF,0XBF,0XBF,0XBD,
+ 602          0XBC,0XBE,0XBE,0XBE,0XBE,0XBC,0XBD,0XBF,0XBC,0XBF,0XBF,0XBE,0XBC,0XBD,0XBD,0XBF,
+ 603          0XBF,0XBF,0XBF,0XBC,0XBF,0XBF,0XBF,0XBF,0XBF,0X9F,0X80,0X80,0X80,0X80,0X80,0XFF,
+ 604          };
+ 605          
+ 606          unsigned char code picture7[8][128] ={
+ 607          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 608          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XC0,0XC0,0X80,0X00,0X00,0X00,0X00,0X00,0X00,
+ 609          0X00,0X00,0X78,0X78,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 610          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X04,0X04,0XFC,0XFC,0X04,0X04,0X00,0XE0,0XF0,
+ 611          0X50,0X50,0X70,0X60,0X00,0XF0,0XF0,0X10,0X10,0XF0,0XF0,0X10,0X10,0XF0,0XE0,0X00,
+ 612          0XF0,0XF0,0X10,0X10,0XF0,0XE0,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 613          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 614          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 615          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 616          0X00,0X00,0X80,0X80,0XC0,0XC0,0XC0,0XC0,0XC1,0XC3,0XE3,0XB0,0X98,0X0C,0X0C,0X06,
+ 617          0X06,0X06,0X86,0X86,0X8C,0X8C,0XD8,0XF0,0XE0,0XC0,0X8C,0X8E,0X07,0X03,0X00,0X00,
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 11  
+
+ 618          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X03,0X03,0X00,0X00,0X00,0X01,0X03,
+ 619          0X02,0X02,0X03,0X01,0X00,0X03,0X03,0X00,0X00,0X03,0X03,0X00,0X00,0X03,0X03,0X00,
+ 620          0X0F,0X0F,0X02,0X02,0X03,0X01,0X00,0X03,0X03,0X00,0X00,0X00,0XC0,0XE0,0X70,0X30,
+ 621          0X30,0X30,0XE0,0XC0,0X00,0X00,0X00,0X00,0X80,0XE0,0XF0,0XF0,0X00,0X00,0X20,0X50,
+ 622          0X20,0X00,0XC0,0X20,0X10,0X10,0X20,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 623          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X80,0XC0,0X60,0X30,0X30,0X18,0X18,0X18,
+ 624          0X1E,0X0F,0X01,0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X01,0X01,0X01,0X03,0X03,0X06,
+ 625          0X06,0X03,0X03,0X01,0X01,0X00,0X80,0X80,0X80,0XC1,0XC1,0XC1,0X81,0X87,0X86,0X8C,
+ 626          0XFC,0XF8,0X00,0X00,0X00,0X00,0X00,0X00,0XFA,0X00,0XF8,0X08,0X08,0XF0,0X00,0X90,
+ 627          0XA8,0XA8,0X48,0X00,0XFA,0X00,0X70,0X88,0X88,0X88,0XFE,0X00,0X70,0XA8,0XA8,0XA8,
+ 628          0X30,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XC0,0XE0,0XF0,0XD8,
+ 629          0XDC,0XCE,0XC7,0XC1,0X00,0X38,0X3C,0X37,0X33,0X30,0XFF,0XFF,0X30,0X00,0X00,0X00,
+ 630          0X00,0X00,0X01,0X02,0X04,0X04,0X02,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 631          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X0F,0X1F,0X30,0X60,0X60,0XC0,0XC0,0XC0,
+ 632          0X60,0X60,0XC0,0XC0,0XC0,0XC0,0XC0,0XC0,0XC0,0XC0,0XC0,0XC0,0XC0,0X80,0X80,0X80,
+ 633          0X80,0X80,0XB8,0XFC,0XE6,0XC3,0XC3,0X81,0X01,0X00,0X00,0X00,0X81,0X81,0X81,0X81,
+ 634          0X81,0XC3,0XFF,0X7E,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 635          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 636          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X60,0X70,0X38,0X18,
+ 637          0X18,0X18,0XF0,0XE0,0X00,0XE0,0XF0,0X18,0X18,0X18,0X38,0XF0,0XC0,0X00,0X10,0X28,
+ 638          0X10,0X00,0XE0,0X10,0X08,0X08,0X10,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 639          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 640          0X00,0X1C,0X1C,0X00,0X00,0X70,0X70,0X00,0X00,0X1C,0X1C,0X00,0X00,0X71,0X71,0X01,
+ 641          0X01,0X1D,0X1D,0X00,0X00,0X00,0X01,0X01,0X03,0X03,0X03,0X01,0X01,0X01,0X01,0X01,
+ 642          0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X38,0X44,0X44,0X44,0X38,0X00,0X3C,0X40,
+ 643          0X40,0X7C,0X00,0X04,0X3E,0X44,0X00,0X48,0X54,0X54,0X24,0X00,0X7D,0X00,0X38,0X44,
+ 644          0X44,0X44,0X7F,0X00,0X38,0X54,0X54,0X54,0X18,0X00,0X00,0X00,0X60,0X70,0X78,0X6C,
+ 645          0X6E,0X67,0X63,0X60,0X00,0X31,0X73,0X67,0X66,0X66,0X73,0X3F,0X0F,0X00,0X00,0X00,
+ 646          0X00,0X00,0X00,0X01,0X02,0X02,0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 647          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 648          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 649          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 650          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 651          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 652          0X00,0X00,0X00,0X00,0X80,0XE0,0X30,0XE0,0X80,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 653          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 654          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 655          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 656          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0XFE,0XFE,0X10,0X10,0XFE,0XFE,0X00,0XF8,0XF8,
+ 657          0X00,0X00,0XF8,0XF8,0X00,0XF8,0XF8,0X08,0X08,0XF8,0XF8,0X08,0X08,0XF8,0XF0,0X00,
+ 658          0XFA,0XFA,0X00,0XF0,0XF8,0X08,0X08,0XFE,0XFE,0X00,0XFA,0XFA,0X00,0X08,0XFC,0XFE,
+ 659          0X08,0X00,0X08,0X78,0XF0,0X80,0XF0,0X78,0X08,0X00,0X00,0X00,0X00,0X00,0X00,0XF0,
+ 660          0XF8,0XFC,0XE6,0XC3,0XC1,0XC0,0XC0,0XC0,0XC1,0XC3,0XE6,0XFC,0XF8,0XF0,0X00,0X00,
+ 661          0XE0,0XF0,0X88,0X88,0X98,0X10,0X00,0X00,0X80,0X60,0XF8,0XF8,0X00,0X00,0X00,0X00,
+ 662          0X80,0X00,0X00,0X00,0X00,0X80,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 663          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 664          0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X01,0X01,0X00,0X00,0X01,0X01,0X00,0X00,0X01,
+ 665          0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X00,0X00,0X01,0X01,0X00,0X00,0X01,0X01,0X00,
+ 666          0X01,0X01,0X00,0X00,0X01,0X01,0X01,0X01,0X01,0X00,0X01,0X01,0X00,0X00,0X00,0X01,
+ 667          0X01,0X00,0X04,0X04,0X07,0X03,0X01,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X03,
+ 668          0X07,0X0C,0X19,0X19,0X3F,0X3F,0X3F,0X3F,0X3F,0X1F,0X1F,0X0F,0X07,0X03,0X00,0X00,
+ 669          0X0F,0X1F,0X10,0X10,0X1F,0X0F,0X00,0X06,0X05,0X04,0X1F,0X1F,0X04,0X00,0X00,0X01,
+ 670          0X12,0X09,0X04,0X02,0X09,0X14,0X08,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,
+ 671          };//\00
+ 672          
+ 673          //-----------------------------------------------------------------------------
+ 674          // End Of File
+ 675          //-----------------------------------------------------------------------------
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    434    ----
+   CONSTANT SIZE    =   4096    ----
+C51 COMPILER V9.53.0.0   F30X_BLINKY                                                       07/05/2018 18:11:56 PAGE 12  
+
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----       2
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

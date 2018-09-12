@@ -1,0 +1,210 @@
+C51 COMPILER V9.53.0.0   F30X_BLINKY_WEA012864_SPI                                         09/07/2018 15:22:03 PAGE 1   
+
+
+C51 COMPILER V9.53.0.0, COMPILATION OF MODULE F30X_BLINKY_WEA012864_SPI
+OBJECT MODULE PLACED IN .\src/F30x_Blinky_WEA012864_SPI.OBJ
+COMPILER INVOKED BY: Z:\home\gabriel\Descargas\SimplicityStudio_v4\developer\toolchains\keil_8051\9.53\BIN\C51.exe /root
+                    -/SimplicityStudio/v4_workspace/F30x_Blinky_c/src/F30x_Blinky_WEA012864_SPI.c OMF2 SMALL DEBUG OBJECTEXTEND ROM(LARGE) WA
+                    -RNINGLEVEL(2) FLOATFUZZY(3) OPTIMIZE(8,SPEED) DEFINE(DEBUG=1) INTVECTOR(0X0000) INTPROMOTE INCDIR(/home/gabriel/Descarga
+                    -s/SimplicityStudio_v4/developer/sdks/8051/v4.1.2//Device/shared/si8051base;/home/gabriel/Descargas/SimplicityStudio_v4/d
+                    -eveloper/sdks/8051/v4.1.2//Device/C8051F300/inc;/root/SimplicityStudio/v4_workspace/F30x_Blinky_c/inc) PRINT(.\src/F30x_
+                    -Blinky_WEA012864_SPI.lst) COND PAGEWIDTH(120) PAGELENGTH(65) OBJECT(.\src/F30x_Blinky_WEA012864_SPI.OBJ)
+
+line level    source
+
+   1          //-----------------------------------------------------------------------------
+   2          // F30x_Blinky.c
+   3          //-----------------------------------------------------------------------------
+   4          // Copyright 2014 Silicon Laboratories, Inc.
+   5          // http://developer.silabs.com/legal/version/v11/Silicon_Labs_Software_License_Agreement.txt
+   6          //
+   7          // Tomando el ejemplo de parpadeo de led de la placa de C8051F30x, que hace encender el led 5
+   8          // veces por segundo usando el interrupt handler del Timer2, agregamos la rutinas para manejar
+   9          // El display OLED de Winstar WEA012864
+  10          // Este display tiene una interfaz SPI que está implementada por SW.
+  11          // Se imprime un mensaje de texto y se muestran 5 imágenes
+  12          //
+  13          //
+  14          // How To Test:
+  15          // ------------
+  16          // 1) Ensure shorting blocks are place on the following:
+  17          //    - J3: P0.2 - P0.2_LED
+  18          // 2) Connect the USB Debug Adapter to J4.
+  19          // 3) Connect the 9V power adapter to P1.
+  20          // 4) Compile and download code to a 'F300 device on a C8051F300-TB development
+  21          //    board selecting Run -> Debug from the menus, clicking the Debug button in
+  22          //    the quick menu, or pressing F11.
+  23          // 5) Run the code by selecting Run -> Resume from the menus, clicking the
+  24          //    Resume button in the quick menu, or pressing F8.
+  25          // 6) The LED should blink at 5 Hz.
+  26          //
+  27          // Target:         C8051F30x
+  28          // Tool chain:     Simplicity Studio / Keil C51 9.51
+  29          // Command Line:   None
+  30          //
+  31          // Release 1.1 (BL)
+  32          //    - Updated Description / How to Test
+  33          //    - Replaced C51 code with compiler agnostic code
+  34          //    - 09 JAN 2014
+  35          //
+  36          // Release 1.0
+  37          //    -Initial Revision BW
+  38          //    -11-Oct-01
+  39          //
+  40          //-----------------------------------------------------------------------------
+  41          // Includes
+  42          //-----------------------------------------------------------------------------
+  43          #include "SI_C8051F300_Register_Enums.h"
+  44          #include "init.h"
+  45          #include "wea012864.h"
+  46          
+  47          //-----------------------------------------------------------------------------
+  48          // Global CONSTANTS
+  49          //-----------------------------------------------------------------------------
+  50          
+  51          #define SYSCLK       24500000 / 8               // SYSCLK frequency in Hz
+C51 COMPILER V9.53.0.0   F30X_BLINKY_WEA012864_SPI                                         09/07/2018 15:22:03 PAGE 2   
+
+  52          
+  53          SBIT (LED, SFR_P0, 2);                          // LED='1' means ON
+  54          
+  55          //-----------------------------------------------------------------------------
+  56          // Function PROTOTYPES
+  57          //-----------------------------------------------------------------------------
+  58          INTERRUPT_PROTO(Timer2_ISR, TIMER2_IRQn);
+  59          void SYSCLK_Init (void);
+  60          void PORT_Init (void);
+  61          void Timer2_Init (S16 counts);
+  62          
+  63          void uDelay(unsigned char);
+  64          void delay(unsigned char);
+  65          
+  66          // RPI
+  67          const char str[]={"*HOLA*"};
+  68          const char str_Winstar[]={"WINSTAR"};
+  69          const char str_Electro[]={"ELECTROCOMPONENTES"};
+  70          
+  71          
+  72          extern unsigned char code picture4[8][128];
+  73          extern unsigned char code picture5[8][128];
+  74          extern unsigned char code picture6[8][128];
+  75          extern unsigned char code picture7[8][128];
+  76          extern unsigned char code Winstar[8][128];
+  77          
+  78          
+  79          
+  80           
+  81          //-----------------------------------------------------------------------------
+  82          // MAIN Routine
+  83          //-----------------------------------------------------------------------------
+  84          void main (void) {
+  85   1      
+  86   1              SYSCLK_Init ();                         // Initialize system clock to 24.5MHz
+  87   1              PORT_Init ();                           // Initialize crossbar and GPIO
+  88   1              Timer2_Init (SYSCLK / 12 / 10);         // Init Timer2 to generate interrupts at a 10Hz rate.
+  89   1      
+  90   1              Initial_SSD1306BZ();                                    // Inicializa display
+  91   1      
+  92   1              IE_EA = 1;                              // enable global interrupts
+  93   1      
+  94   1          while (1) {                                 // spin forever
+  95   2              ///*    DEMO
+  96   2              clean();
+  97   2              delay(100);
+  98   2      
+  99   2              write_Word(str_Electro);        // Escribe un texto
+ 100   2              delay(75);
+ 101   2      
+ 102   2              show_pic(&picture4[0]);
+ 103   2              delay(75);
+ 104   2      
+ 105   2              show_pic(&picture5[0]);
+ 106   2              delay(75);
+ 107   2      
+ 108   2              show_pic(&picture6[0]);
+ 109   2              delay(75);
+ 110   2      
+ 111   2              show_pic(&picture7[0]);
+ 112   2              delay(75);
+ 113   2      
+ 114   2              show_pic(&Winstar[0]);
+C51 COMPILER V9.53.0.0   F30X_BLINKY_WEA012864_SPI                                         09/07/2018 15:22:03 PAGE 3   
+
+ 115   2              delay(75);
+ 116   2         }
+ 117   1      }
+ 118          
+ 119          
+ 120          
+ 121          
+ 122          //-------------------------------------------------
+ 123          //     uDelay
+ 124          //-------------------------------------------------
+ 125          // Delay us
+ 126          void uDelay(unsigned char l)
+ 127          {
+ 128   1              while(l--);
+ 129   1      }
+ 130          
+ 131          //-------------------------------------------------
+ 132          //     delay
+ 133          //-------------------------------------------------
+ 134          // Delay ms
+ 135          void delay(unsigned char coun)
+ 136          {
+ 137   1              unsigned char i,j,k;
+ 138   1      
+ 139   1              for(k = 0 ;k<coun;k++)
+ 140   1              {
+ 141   2                      for(j = 0 ;j<150;j++)
+ 142   2                      {
+ 143   3                              for(i = 0 ;i< 200;i++)
+ 144   3                              {}
+ 145   3                      }
+ 146   2              }
+ 147   1      }
+ 148          
+ 149          
+ 150          
+ 151          //-----------------------------------------------------------------------------
+ 152          // Interrupt Service Routines
+ 153          //-----------------------------------------------------------------------------
+ 154          
+ 155          //-----------------------------------------------------------------------------
+ 156          // Timer2_ISR
+ 157          //-----------------------------------------------------------------------------
+ 158          // This routine changes the state of the LED whenever Timer2 overflows.
+ 159          //
+ 160          INTERRUPT(Timer2_ISR, TIMER2_IRQn)
+ 161          {
+ 162   1         TMR2CN_TF2H = 0;                       // clear Timer2 interrupt flag
+ 163   1         LED = ~LED;                            // change state of LED
+ 164   1      }
+ 165          
+ 166          
+ 167          
+ 168          
+ 169          
+ 170          //-----------------------------------------------------------------------------
+ 171          // End Of File
+ 172          //-----------------------------------------------------------------------------
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    140    ----
+   CONSTANT SIZE    =   ----    ----
+C51 COMPILER V9.53.0.0   F30X_BLINKY_WEA012864_SPI                                         09/07/2018 15:22:03 PAGE 4   
+
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     34    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+   EDATA SIZE       =   ----    ----
+   HDATA SIZE       =   ----    ----
+   XDATA CONST SIZE =   ----    ----
+   FAR CONST SIZE   =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
